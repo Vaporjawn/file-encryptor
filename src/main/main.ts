@@ -14,6 +14,16 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import {
+  encryptFile,
+  decryptFile,
+  encryptFileWithDownload,
+  decryptFileWithDownload,
+  batchProcessWithDownload,
+  getFileInfo,
+  suggestOutputFilename,
+  isFileEncrypted,
+} from './crypto';
 
 class AppUpdater {
   constructor() {
@@ -29,6 +39,135 @@ ipcMain.on('ipc-example', async (event, arg) => {
   const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
   console.log(msgTemplate(arg));
   event.reply('ipc-example', msgTemplate('pong'));
+});
+
+// IPC handlers for encryption/decryption functions
+ipcMain.handle(
+  'encrypt-file',
+  async (event, inputPath: string, outputPath: string, password: string) => {
+    return encryptFile(inputPath, outputPath, password);
+  },
+);
+
+ipcMain.handle(
+  'decrypt-file',
+  async (event, inputPath: string, outputPath: string, password: string) => {
+    return decryptFile(inputPath, outputPath, password);
+  },
+);
+
+ipcMain.handle(
+  'encrypt-file-with-download',
+  async (
+    event,
+    inputPath: string,
+    password: string,
+    suggestedFileName?: string,
+  ) => {
+    return encryptFileWithDownload(
+      inputPath,
+      password,
+      (progress) => {
+        event.sender.send('encryption-progress', progress);
+      },
+      suggestedFileName,
+    );
+  },
+);
+
+ipcMain.handle(
+  'decrypt-file-with-download',
+  async (
+    event,
+    inputPath: string,
+    password: string,
+    suggestedFileName?: string,
+  ) => {
+    return decryptFileWithDownload(
+      inputPath,
+      password,
+      (progress) => {
+        event.sender.send('decryption-progress', progress);
+      },
+      suggestedFileName,
+    );
+  },
+);
+
+ipcMain.handle(
+  'batch-process-with-download',
+  async (
+    event,
+    files: string[],
+    operation: 'encrypt' | 'decrypt',
+    password: string,
+    outputDirectory?: string,
+  ) => {
+    return batchProcessWithDownload(
+      files,
+      operation,
+      password,
+      outputDirectory,
+      (fileIndex, fileProgress, fileName) => {
+        event.sender.send('batch-progress', {
+          fileIndex,
+          fileProgress,
+          fileName,
+        });
+      },
+    );
+  },
+);
+
+ipcMain.handle('get-file-info', async (event, filePath: string) => {
+  return getFileInfo(filePath);
+});
+
+ipcMain.handle(
+  'suggest-output-filename',
+  async (event, inputPath: string, operation: 'encrypt' | 'decrypt') => {
+    return suggestOutputFilename(inputPath, operation);
+  },
+);
+
+ipcMain.handle('is-file-encrypted', async (event, filePath: string) => {
+  return isFileEncrypted(filePath);
+});
+
+// Temporary file handlers
+ipcMain.handle(
+  'get-temp-file-path',
+  async (event, originalFileName: string) => {
+    const os = require('os');
+    const pathUtils = require('path');
+    const { v4: uuidv4 } = require('uuid');
+
+    const tempDir = os.tmpdir();
+    const fileExtension = pathUtils.extname(originalFileName);
+    const baseName = pathUtils.basename(originalFileName, fileExtension);
+    const uniqueId = uuidv4();
+
+    return pathUtils.join(tempDir, `${baseName}_${uniqueId}${fileExtension}`);
+  },
+);
+
+ipcMain.handle(
+  'save-buffer-to-file',
+  async (event, filePath: string, arrayBuffer: ArrayBuffer) => {
+    const fs = require('fs').promises;
+    const buffer = Buffer.from(arrayBuffer);
+    await fs.writeFile(filePath, buffer);
+    return filePath;
+  },
+);
+
+ipcMain.handle('delete-temp-file', async (event, filePath: string) => {
+  const fs = require('fs').promises;
+  try {
+    await fs.unlink(filePath);
+  } catch {
+    // Silently fail if file doesn't exist - temp files will be cleaned up by OS
+  }
 });
 
 if (process.env.NODE_ENV === 'production') {
